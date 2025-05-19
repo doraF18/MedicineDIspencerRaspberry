@@ -78,9 +78,7 @@ def add_to_history():
         "Authorization": "Bearer " + id_token,
     }
 
-    body = {"entry": ["LCD", "cox", "weed", "meth"]}
-
-    res = requests.put(url, json=body, headers=header)
+    res = requests.put(url, headers=header)
 
     if res.status_code != 200:
         print("Error adding to history:", res.json())
