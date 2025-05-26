@@ -8,7 +8,7 @@ from models.StepperMotor import StepperMotor
 
 motor = StepperMotor(18, 23, 27, 22)
 button = Button(17, hold_time=3, bounce_time=0.15)
-lcd = CharLCD('PCF8574T', address=0x27, port=1, cols=16, rows=2)
+lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
 long_press = False
 
 async def printToLCD(message, timeout = None):
@@ -113,7 +113,14 @@ def on_button_pressed():
     except Exception as e:
         printToLCD("Error occurred!\nTry pairing again", timeout=5)
 
-button.when_released = on_button_pressed
-button.when_held = on_button_held
 
-pause()
+try:
+    button.when_released = on_button_pressed
+    button.when_held = on_button_held
+
+    printToLCD("Device is online", timeout=3)
+
+    pause()
+finally:
+    motor.release()
+    lcd.clear()
