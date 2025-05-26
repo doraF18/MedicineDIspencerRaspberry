@@ -36,7 +36,7 @@ class StepperMotor(Device):
             for step in sequence:
                 self._set_step(step)
                 time.sleep(self.delay)
-        self.release()
+        # self.release()
 
     def rotate(self, turns=1.0, direction=1):
         steps = int(self.steps_per_rev * turns)
@@ -50,7 +50,7 @@ class StepperMotor(Device):
             pin.off()
 
     def close(self):
-        self.release()
+        # self.release()
         for pin in self.pins:
             pin.close()
         super().close()
