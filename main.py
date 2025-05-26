@@ -107,10 +107,12 @@ def on_button_pressed():
     
     try:
         add_to_history()
+        # TODO: fix problem with motor not rotating
         motor.half_turn(direction=1)
 
         printToLCD("Pills had been taken", timeout=5)
     except Exception as e:
+        print("Error occurred:", e)
         printToLCD("Error occurred!\nTry pairing again", timeout=5)
 
 
