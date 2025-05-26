@@ -1,18 +1,23 @@
 import requests
 import json
 from gpiozero import Button
+from signal import pause
+from RPLCD.i2c import CharLCD
+from asyncio import sleep
+from models.StepperMotor import StepperMotor
 
-button = Button(17, hold_time=3)
+motor = StepperMotor(18, 23, 27, 22)
+button = Button(17, hold_time=3, bounce_time=0.15)
+lcd = CharLCD('PCF8574T', address=0x27, port=1, cols=16, rows=2)
+long_press = False
 
-@button.when_held
-def on_button_held():
-    print("Pairing...")
-    init_device()
+async def printToLCD(message, timeout = None):
+    lcd.clear()
+    lcd.write_string(message)
 
-@button.when_activated
-def on_button_activated():
-    print("Button activated!")
-    add_to_history()
+    if timeout:
+        await sleep(timeout)
+        lcd.clear()
 
 # TODO: implement a way to get the credentials from mobile app, not hardcoded
 def get_credentials():
@@ -37,8 +42,7 @@ def init_device():
     response = requests.post(url, json=body)
 
     if response.status_code != 200:
-        print("Error signing in:", response.json())
-        return
+        raise Exception("Error signing in: " + response.text)
 
     with open("firebase_tokens.json", "w") as f:
         json.dump(response.json(), f, indent=4)
@@ -55,15 +59,12 @@ def refresh_id_token(refresh_token):
     response = requests.post(url, json=body)
 
     if response.status_code != 200:
-        print("Error refreshing token:", response.json())
-        init_device() 
-        return
+        raise Exception("Error refreshing ID token: " + response.text)
     else:
         with open("firebase_tokens.json", "w") as f:
             json.dump(response.json(), f, indent=4)
         return response.json()["id_token"]
 
-# TODO: call this when the user presses the button
 def add_to_history():
 
     with open("firebase_tokens.json", "r") as f:
@@ -81,6 +82,38 @@ def add_to_history():
     res = requests.put(url, headers=header)
 
     if res.status_code != 200:
-        print("Error adding to history:", res.json())
+        raise Exception("Error adding to history")      
     else:
         print("Added to history")
+
+def on_button_held():
+    global long_press
+    long_press = True
+
+    printToLCD("Pairing...")
+
+    try:
+        init_device()
+        printToLCD("Device paired successfully", timeout=5)
+    except Exception as e:
+        printToLCD("Error occurred!\nTry pairing again", timeout=5)
+
+def on_button_pressed():
+
+    global long_press
+    if long_press:
+        long_press = False
+        return
+    
+    try:
+        add_to_history()
+        motor.half_turn(direction=1)
+
+        printToLCD("Pills had been taken", timeout=5)
+    except Exception as e:
+        printToLCD("Error occurred!\nTry pairing again", timeout=5)
+
+button.when_released = on_button_pressed
+button.when_held = on_button_held
+
+pause()
