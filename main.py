@@ -122,5 +122,7 @@ try:
 
     pause()
 finally:
-    motor.release()
+    motor.close()
     lcd.clear()
+    lcd.close()
+    button.close()
