@@ -54,3 +54,15 @@ class StepperMotor(Device):
         for pin in self.pins:
             pin.close()
         super().close()
+    
+    def test(self):
+        print("Testing motor...")
+
+        start_time = time.time()
+        while time.time() - start_time < 10:
+            for i in range(4):
+                for p in range(4):
+                    self.pins[p].value = (p == i)
+                time.sleep(0.2)
+                
+        print("Motor test completed.")

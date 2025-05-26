@@ -122,6 +122,8 @@ try:
 
     printToLCD("Device is online", timeout=3)
 
+    motor.test()
+
     pause()
 finally:
     motor.close()
