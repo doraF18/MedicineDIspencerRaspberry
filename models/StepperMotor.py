@@ -3,7 +3,7 @@ from gpiozero.devices import Device
 import time
 
 class StepperMotor(Device):
-    def __init__(self, pin1, pin2, pin3, pin4, steps_per_rev=2048, delay=0.001):
+    def __init__(self, pin1, pin2, pin3, pin4, steps_per_rev=2048, delay=0.01):
         super().__init__()
         self.pins = [
             OutputDevice(pin1),
