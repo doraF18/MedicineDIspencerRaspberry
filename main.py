@@ -3,7 +3,7 @@ import json
 from gpiozero import Button
 from signal import pause
 from RPLCD.i2c import CharLCD
-from asyncio import sleep
+from time import sleep
 from models.StepperMotor import StepperMotor
 
 motor = StepperMotor(18, 23, 27, 22)
@@ -11,12 +11,12 @@ button = Button(17, hold_time=3, bounce_time=0.15)
 lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
 long_press = False
 
-async def printToLCD(message, timeout = None):
+def printToLCD(message, timeout = None):
     lcd.clear()
     lcd.write_string(message)
 
     if timeout:
-        await sleep(timeout)
+        sleep(timeout)
         lcd.clear()
 
 # TODO: implement a way to get the credentials from mobile app, not hardcoded
