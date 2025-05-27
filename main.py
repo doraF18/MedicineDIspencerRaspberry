@@ -1,14 +1,23 @@
+import os
 import requests
 import json
 from gpiozero import Button
 from signal import pause
 from RPLCD.i2c import CharLCD
 from time import sleep
-from models.StepperMotor import StepperMotor
+from dotenv import load_dotenv
+from models import StepperMotor
+from api import DeviceConfigurator
+
+load_dotenv()
+
+DEVICE_CONFIG_PATH = os.getenv("DEVICE_CONFIG_PATH")
+FIREBASE_PATH = os.getenv("FIREBASE_PATH")
 
 motor = StepperMotor(18, 23, 25, 22)
 button = Button(17, hold_time=3, bounce_time=0.15)
 lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
+# configurator = DeviceConfigurator(config_path=DEVICE_CONFIG_PATH)
 long_press = False
 
 def printToLCD(message, timeout = None):
@@ -44,7 +53,7 @@ def init_device():
     if response.status_code != 200:
         raise Exception("Error signing in: " + response.text)
 
-    with open("firebase_tokens.json", "w") as f:
+    with open(FIREBASE_PATH, "w") as f:
         json.dump(response.json(), f, indent=4)
 
 def refresh_id_token(refresh_token):
@@ -61,13 +70,13 @@ def refresh_id_token(refresh_token):
     if response.status_code != 200:
         raise Exception("Error refreshing ID token: " + response.text)
     else:
-        with open("firebase_tokens.json", "w") as f:
+        with open(FIREBASE_PATH, "w") as f:
             json.dump(response.json(), f, indent=4)
         return response.json()["id_token"]
 
 def add_to_history():
 
-    with open("firebase_tokens.json", "r") as f:
+    with open(FIREBASE_PATH, "r") as f:
         tokens = f.read()
         tokens = json.loads(tokens)
         refresh_token = tokens["refreshToken"]
