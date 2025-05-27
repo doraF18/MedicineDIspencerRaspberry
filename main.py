@@ -14,7 +14,7 @@ load_dotenv()
 DEVICE_CONFIG_PATH = os.getenv("DEVICE_CONFIG_PATH")
 FIREBASE_PATH = os.getenv("FIREBASE_PATH")
 
-motor = StepperMotor(18, 23, 25, 22, delay=0.001)
+motor = StepperMotor(18, 23, 25, 22)
 button = Button(17, hold_time=3, bounce_time=0.15)
 lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
 # configurator = DeviceConfigurator(config_path=DEVICE_CONFIG_PATH)
