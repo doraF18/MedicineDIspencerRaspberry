@@ -51,6 +51,7 @@ def init_device():
     response = requests.post(url, json=body)
 
     if response.status_code != 200:
+        print(response.text)
         raise Exception("Error signing in: " + response.text)
 
     with open(FIREBASE_PATH, "w") as f:
@@ -68,6 +69,7 @@ def refresh_id_token(refresh_token):
     response = requests.post(url, json=body)
 
     if response.status_code != 200:
+        print(response.text)
         raise Exception("Error refreshing ID token: " + response.text)
     else:
         with open(FIREBASE_PATH, "w") as f:
@@ -91,6 +93,7 @@ def add_to_history():
     res = requests.put(url, headers=header)
 
     if res.status_code != 200:
+        print(res.text)
         raise Exception("Error adding to history")      
     else:
         print("Added to history")

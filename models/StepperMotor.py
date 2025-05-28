@@ -59,7 +59,7 @@ class StepperMotor(Device):
         print("Testing stepper...")
         start_time = time.time()
 
-        while time.time() - start_time < 10:
+        while time.time() - start_time < 5:
             for step in self.sequence:
                 for p in range(4):
                     self.pins[p].value = step[p]
