@@ -124,6 +124,7 @@ def on_button_pressed():
         return
     
     try:
+        print("Button pressed")
         add_to_history()
         # TODO: fix problem with motor not rotating
         motor.half_turn(direction=1)
