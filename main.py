@@ -50,12 +50,18 @@ def init_device():
 
     response = requests.post(url, json=body)
 
+    print("Got here")
+
     if response.status_code != 200:
         print(response.text)
         raise Exception("Error signing in: " + response.text)
+    
+    print("Got here 2")
 
     with open(FIREBASE_PATH, "w") as f:
         json.dump(response.json(), f, indent=4)
+
+    print("Got here 3")
 
 def refresh_id_token(refresh_token):
 
