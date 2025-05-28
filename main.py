@@ -126,8 +126,10 @@ def on_button_pressed():
     try:
         print("Button pressed")
         add_to_history()
+        print("Added to history")
         # TODO: fix problem with motor not rotating
         motor.half_turn(direction=1)
+        print("Motor rotated")
 
         printToLCD("Pills had been taken", timeout=5)
     except Exception as e:
