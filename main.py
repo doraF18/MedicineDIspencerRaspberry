@@ -78,8 +78,6 @@ def refresh_id_token(refresh_token):
         print(response.text)
         raise Exception("Error refreshing ID token: " + response.text)
     else:
-        with open(FIREBASE_PATH, "w") as f:
-            json.dump(response.json(), f, indent=4)
         return response.json()["id_token"]
 
 def add_to_history():
