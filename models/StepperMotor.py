@@ -43,7 +43,7 @@ class StepperMotor(Device):
         self.step(steps, direction)
 
     def half_turn(self, direction=1):
-        self.rotate(0.5, direction)
+        self.rotate(0.12, direction)
 
     def release(self):
         for pin in self.pins:

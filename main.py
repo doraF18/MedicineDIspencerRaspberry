@@ -141,7 +141,7 @@ try:
 
     printToLCD("Device is online", timeout=3)
 
-    motor.test()
+    # motor.test()
 
     pause()
 finally:
