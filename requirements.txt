@@ -1,0 +1,7 @@
+gpiozero
+RPLCD
+requests
+python-dotenv
+smbus2
+lgpio
+rpi-lgpio

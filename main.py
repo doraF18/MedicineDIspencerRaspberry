@@ -6,6 +6,7 @@ from signal import pause
 from RPLCD.i2c import CharLCD
 from time import sleep
 from dotenv import load_dotenv
+from hardware_common import STEPPER_PINS
 from models import StepperMotor
 from api import DeviceConfigurator
 
@@ -14,8 +15,8 @@ load_dotenv()
 DEVICE_CONFIG_PATH = os.getenv("DEVICE_CONFIG_PATH")
 FIREBASE_PATH = os.getenv("FIREBASE_PATH")
 
-motor = StepperMotor(18, 23, 25, 22)
-button = Button(17, hold_time=3, bounce_time=0.15)
+motor = StepperMotor(*STEPPER_PINS)
+button = Button(26, hold_time=3, bounce_time=0.15)
 lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
 # configurator = DeviceConfigurator(config_path=DEVICE_CONFIG_PATH)
 long_press = False
