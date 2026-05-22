@@ -1,0 +1,13 @@
+2026-05-22 11:18:21,189 - __main__ - ERROR - Button unavailable: pin GPIO22 is already in use by <gpiozero.OutputDevice object on pin GPIO22, active_high=True, is_active=False>
+2026-05-22 11:18:21,190 - __main__ - ERROR - LED unavailable: pin GPIO17 is already in use by <gpiozero.OutputDevice object on pin GPIO17, active_high=True, is_active=False>
+2026-05-22 11:18:21,190 - __main__ - ERROR - Buzzer unavailable: pin GPIO27 is already in use by <gpiozero.OutputDevice object on pin GPIO27, active_high=True, is_active=False>
+2026-05-22 11:18:21,276 - __main__ - WARNING - Button unavailable, input handling disabled
+2026-05-22 11:18:21,276 - __main__ - INFO - ============================================================
+2026-05-22 11:18:21,276 - __main__ - INFO - Starting Medication Dispenser Application
+2026-05-22 11:18:21,276 - __main__ - INFO - ============================================================
+2026-05-22 11:18:21,277 - api.DeviceManager - INFO - Loaded existing device ID from config
+2026-05-22 11:18:21,277 - api.DeviceManager - INFO - Device Manager initialized with device_id: a0054a3d-3420-4475-ace3-315f70778967
+2026-05-22 11:18:21,277 - __main__ - INFO - Device ID: a0054a3d-3420-4475-ace3-315f70778967
+2026-05-22 11:18:23,210 - __main__ - INFO - Cleaning GPIO resources...
+2026-05-22 11:18:23,215 - __main__ - INFO - Cleanup complete
+2026-05-22 11:18:23,215 - __main__ - INFO - GPIO cleanup completed

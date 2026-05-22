@@ -1,0 +1,14 @@
+2026-05-22 11:16:34,188 - __main__ - ERROR - Stepper motor unavailable: 'GPIO busy'
+2026-05-22 11:16:34,189 - __main__ - ERROR - Button unavailable: 'GPIO busy'
+2026-05-22 11:16:34,189 - __main__ - ERROR - LED unavailable: 'GPIO busy'
+2026-05-22 11:16:34,189 - __main__ - ERROR - Buzzer unavailable: 'GPIO busy'
+2026-05-22 11:16:34,270 - __main__ - WARNING - Button unavailable, input handling disabled
+2026-05-22 11:16:34,270 - __main__ - INFO - ============================================================
+2026-05-22 11:16:34,270 - __main__ - INFO - Starting Medication Dispenser Application
+2026-05-22 11:16:34,270 - __main__ - INFO - ============================================================
+2026-05-22 11:16:34,270 - api.DeviceManager - INFO - Loaded existing device ID from config
+2026-05-22 11:16:34,270 - api.DeviceManager - INFO - Device Manager initialized with device_id: a0054a3d-3420-4475-ace3-315f70778967
+2026-05-22 11:16:34,270 - __main__ - INFO - Device ID: a0054a3d-3420-4475-ace3-315f70778967
+2026-05-22 11:16:36,182 - __main__ - INFO - Cleaning GPIO resources...
+2026-05-22 11:16:36,187 - __main__ - INFO - Cleanup complete
+2026-05-22 11:16:36,187 - __main__ - INFO - GPIO cleanup completed

@@ -1,0 +1,5 @@
+2026-05-22 11:16:36,182 - __main__ - ERROR - Another instance found before GPIO init
+2026-05-22 11:16:36,182 - __main__ - INFO - Killing old instance PID 6150
+2026-05-22 11:16:38,051 - __main__ - INFO - Cleaning GPIO resources...
+2026-05-22 11:16:38,052 - __main__ - INFO - Cleanup complete
+2026-05-22 11:16:38,052 - __main__ - INFO - GPIO cleanup completed

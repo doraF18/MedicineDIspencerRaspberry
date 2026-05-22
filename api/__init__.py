@@ -1,1 +1,6 @@
-from .DeviceConfigurator import DeviceConfigurator
+try:
+    from .DeviceConfigurator import DeviceConfigurator
+except ImportError:
+    DeviceConfigurator = None
+
+from .DeviceManager import DeviceManager, PairingManager

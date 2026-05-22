@@ -5,14 +5,20 @@ import time
 class StepperMotor(Device):
     def __init__(self, pin1, pin2, pin3, pin4, steps_per_rev=2048, delay=0.001):
         super().__init__()
-        self.pins = [
-            OutputDevice(pin1),
-            OutputDevice(pin2),
-            OutputDevice(pin3),
-            OutputDevice(pin4)
-        ]
+        self.pins = []
         self.steps_per_rev = steps_per_rev
         self.delay = delay
+
+        try:
+            self.pins = [
+                OutputDevice(pin1),
+                OutputDevice(pin2),
+                OutputDevice(pin3),
+                OutputDevice(pin4)
+            ]
+        except Exception:
+            self.close()
+            raise
 
         # Half-step sequence for 28BYJ-48
         self.sequence = [
@@ -46,13 +52,17 @@ class StepperMotor(Device):
         self.rotate(0.12, direction)
 
     def release(self):
-        for pin in self.pins:
+        for pin in getattr(self, "pins", []):
             pin.off()
 
     def close(self):
         # self.release()
-        for pin in self.pins:
-            pin.close()
+        for pin in getattr(self, "pins", []):
+            try:
+                pin.close()
+            except Exception:
+                pass
+        self.pins = []
         super().close()
     
     def test(self):
@@ -61,7 +71,7 @@ class StepperMotor(Device):
 
         while time.time() - start_time < 5:
             for step in self.sequence:
-                for p in range(4):
+                for p in range(min(4, len(self.pins))):
                     self.pins[p].value = step[p]
                 time.sleep(self.delay)
 

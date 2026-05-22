@@ -5,3 +5,5 @@ python-dotenv
 smbus2
 lgpio
 rpi-lgpio
+fastapi
+uvicorn
