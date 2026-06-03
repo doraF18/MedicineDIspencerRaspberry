@@ -16,6 +16,7 @@ import threading
 import signal
 import sys
 import time
+from datetime import datetime
 from gpiozero import Button
 from gpiozero import LED, Buzzer
 from signal import pause
@@ -47,6 +48,12 @@ button = None
 lcd = None
 led = None
 buzzer = None
+
+# Schedule/reminder state
+schedule_lock = threading.Lock()
+cached_schedule = None
+triggered_reminders_date = None
+triggered_reminders_today = set()
 
 # Global state
 long_press = False
@@ -80,6 +87,165 @@ def printToLCD(message, timeout=None):
             lcd.clear()
     except Exception as e:
         logger.error(f"Error displaying on LCD: {e}")
+
+
+def _normalize_schedule_entries(schedule_data):
+    """Return a flat list of schedule entries from the backend payload."""
+    if schedule_data is None:
+        return []
+
+    if isinstance(schedule_data, list):
+        return schedule_data
+
+    if isinstance(schedule_data, dict):
+        for key in ("schedules", "schedule", "data", "items"):
+            entries = schedule_data.get(key)
+            if isinstance(entries, list):
+                return entries
+
+        return [schedule_data]
+
+    return []
+
+
+def _parse_schedule_time(value):
+    if not value:
+        return None
+
+    text = str(value).strip()
+    for format_string in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(text, format_string).time()
+        except ValueError:
+            continue
+
+    return None
+
+
+def _infer_moment(entry):
+    if not isinstance(entry, dict):
+        return None
+
+    for key in ("moment", "doseMoment", "timeSlot", "period"):
+        raw_moment = entry.get(key)
+        if raw_moment:
+            moment = str(raw_moment).strip().upper()
+            if moment in {"MORNING", "NOON", "EVENING"}:
+                return moment
+
+    schedule_time = _parse_schedule_time(
+        entry.get("time")
+        or entry.get("doseTime")
+        or entry.get("scheduledTime")
+    )
+
+    if schedule_time is None:
+        return None
+
+    if 5 <= schedule_time.hour < 12:
+        return "MORNING"
+    if 12 <= schedule_time.hour < 17:
+        return "NOON"
+    return "EVENING"
+
+
+def _time_matches_now(now, schedule_time):
+    if schedule_time is None:
+        return False
+
+    return now.strftime("%H:%M") == schedule_time.strftime("%H:%M")
+
+
+def _flash_led_for_reminder(duration_seconds=3):
+    if led is None:
+        logger.debug("LED unavailable for reminder")
+        return
+
+    logger.info("LED flashing for 3 seconds")
+    end_time = time.monotonic() + duration_seconds
+
+    try:
+        while time.monotonic() < end_time:
+            led.on()
+            sleep(0.3)
+            led.off()
+            sleep(0.3)
+    finally:
+        led.off()
+
+
+def _beep_buzzer_for_reminder(duration_seconds=0.5):
+    if buzzer is None:
+        logger.debug("Buzzer unavailable for reminder")
+        return
+
+    logger.info("Buzzer beep")
+    try:
+        buzzer.on()
+        sleep(duration_seconds)
+    finally:
+        buzzer.off()
+
+
+def trigger_reminder(moment):
+    logger.info(f"Reminder triggered for {moment}")
+
+    buzzer_thread = threading.Thread(target=_beep_buzzer_for_reminder, daemon=True)
+    led_thread = threading.Thread(target=_flash_led_for_reminder, daemon=True)
+
+    buzzer_thread.start()
+    led_thread.start()
+
+    printToLCD(f"Time for pills\n{moment}", timeout=3)
+
+
+def check_scheduled_reminders():
+    global triggered_reminders_date, triggered_reminders_today
+
+    while True:
+        try:
+            time.sleep(5)
+
+            if device_manager is None or not device_manager.is_paired:
+                continue
+
+            now = datetime.now()
+            today = now.strftime("%Y-%m-%d")
+
+            if triggered_reminders_date != today:
+                triggered_reminders_date = today
+                triggered_reminders_today = set()
+
+            with schedule_lock:
+                schedule_snapshot = cached_schedule
+
+            if not schedule_snapshot:
+                continue
+
+            for entry in _normalize_schedule_entries(schedule_snapshot):
+                if not isinstance(entry, dict):
+                    continue
+
+                schedule_time = _parse_schedule_time(
+                    entry.get("time")
+                    or entry.get("doseTime")
+                    or entry.get("scheduledTime")
+                )
+
+                if not _time_matches_now(now, schedule_time):
+                    continue
+
+                moment = _infer_moment(entry)
+                reminder_key = f"{today}_{moment}"
+
+                if reminder_key in triggered_reminders_today:
+                    continue
+
+                triggered_reminders_today.add(reminder_key)
+                trigger_reminder(moment)
+
+        except Exception as e:
+            logger.error(f"Error checking scheduled reminders: {e}")
 
 
 def initialize_device():
@@ -152,23 +318,17 @@ def initialize_hardware():
     """Initialize optional hardware components."""
     global motor, button, lcd, led, buzzer
 
-    # Note: Stepper motor uses GPIO 17, 18, 27, 22 which conflicts with button (22)
-    # and LED (17) and buzzer (27). Disabling motor to allow button/LED/buzzer.
-    # To use the motor, reassign button/LED/buzzer to different pins or use motor via different pins.
     try:
-        # Disabled: motor = StepperMotor(*STEPPER_PINS)
-        motor = None
-        logger.info("Stepper motor disabled to allow button/LED/buzzer pins")
+        motor = StepperMotor(*STEPPER_PINS)
+        logger.info(
+            "✓ Stepper motor initialized on GPIO%s, GPIO%s, GPIO%s, GPIO%s",
+            *STEPPER_PINS,
+        )
     except Exception as e:
         motor = None
         logger.error(f"Stepper motor unavailable: {e}")
 
-    try:
-        button = Button(BUTTON_PIN, hold_time=3, bounce_time=0.15)
-        logger.info(f"✓ Button initialized on GPIO{BUTTON_PIN}")
-    except Exception as e:
-        button = None
-        logger.error(f"Button unavailable: {e}")
+    _initialize_button()
 
     try:
         led = LED(LED_PIN)
@@ -192,6 +352,40 @@ def initialize_hardware():
     except Exception as e:
         lcd = None
         logger.error(f"LCD unavailable: {e}")
+
+
+def _initialize_button():
+    """Attempt to initialize the physical button."""
+    global button
+
+    try:
+        button = Button(BUTTON_PIN, hold_time=3, bounce_time=0.15)
+        logger.info(f"✓ Button initialized on GPIO{BUTTON_PIN}")
+        setup_button_handlers()
+        return True
+    except Exception as e:
+        button = None
+        logger.error(f"Button unavailable: {e}")
+        return False
+
+
+def retry_button_initialization():
+    """Keep retrying button setup until the GPIO becomes available."""
+    global button
+
+    while button is None:
+        time.sleep(10)
+        if _initialize_button():
+            return
+
+
+def setup_button_handlers():
+    """Attach button callbacks when the button is available."""
+    if button is None:
+        return
+
+    button.when_released = on_button_pressed
+    button.when_held = on_button_held
 
 
 def on_button_held():
@@ -261,25 +455,32 @@ def on_button_pressed():
 
     try:
         # Post intake event to backend
-        if device_manager.post_intake_event(source="BUTTON"):
-            logger.info("✓ INTAKE EVENT RECORDED to backend")
+        result = device_manager.post_intake_event(source="BUTTON")
+        if result.get("success"):
+            if result["duplicate"]:
+                printToLCD("Pills already \ntaken", timeout=3)
 
-            if led is not None:
-                led.off()
-            if buzzer is not None:
-                buzzer.off()
-
-            printToLCD("Dose Taken", timeout=3)
-
-            # Trigger motor rotation (disabled for now due to pin conflict)
-            if motor is not None:
-                try:
-                    motor.half_turn(direction=1)
-                    logger.info("✓ Motor rotated")
-                except Exception as e:
-                    logger.error(f"Error rotating motor: {e}")
+                logger.info("Pills already taken")
             else:
-                logger.debug("Motor not available (disabled for button GPIO)")
+                # New intake
+                logger.info("✓ INTAKE EVENT RECORDED to backend")
+
+                if led is not None:
+                    led.off()
+                if buzzer is not None:
+                    buzzer.off()
+
+                printToLCD("Dose Taken", timeout=3)
+
+                # Trigger motor rotation if the stepper initialized successfully
+                if motor is not None:
+                    try:
+                        logger.info("Motor rotating after successful intake")
+                        motor.half_turn(direction=1)
+                    except Exception as e:
+                        logger.error(f"Error rotating motor: {e}")
+                else:
+                    logger.debug("Motor not available")
 
         else:
             logger.error("✗ Failed to record intake event")
@@ -308,17 +509,20 @@ def monitor_pairing_status():
 
 def fetch_schedule_periodically():
     """Background thread to periodically fetch medication schedule"""
-    global device_manager
+    global device_manager, cached_schedule
 
     while True:
         try:
-            time.sleep(300)  # Check every 5 minutes
-
             if device_manager and device_manager.is_paired:
                 logger.debug("Fetching medication schedule...")
                 schedule = device_manager.get_schedule()
                 if schedule:
+                    with schedule_lock:
+                        cached_schedule = schedule
+                    logger.info("Schedule fetched")
                     logger.info(f"Schedule updated: {schedule}")
+
+            time.sleep(300)  # Check every 5 minutes
 
         except Exception as e:
             logger.error(f"Error fetching schedule: {e}")
@@ -328,31 +532,44 @@ def check_and_cleanup_existing_instance():
     """Check for and optionally kill existing main.py instance before GPIO init"""
     pid_file = ".app.pid"
     
-    # First, kill any stale Python processes that may be holding /dev/gpiochip0
-    # (from previous crashes or unclean exits)
+    # First, kill any stale Python processes that may be holding GPIO resources
+    # (from previous crashes, stopped test scripts, or unclean exits)
     try:
-        import subprocess
-        result = subprocess.run(
-            "lsof 2>/dev/null | grep gpiochip0 | awk '{print $2}' | sort -u",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=2
+        import glob
+
+        stale_patterns = (
+            "main.py",
+            "test_button.py",
+            "test_components.py",
+            "test_led.py",
+            "test_buzzer.py",
+            "test_stepper.py",
         )
-        stale_pids = result.stdout.strip().split('\n')
-        for pid_str in stale_pids:
-            if pid_str and pid_str.isdigit():
-                pid = int(pid_str)
-                # Don't kill ourselves
-                if pid != os.getpid():
-                    try:
+
+        for cmdline_path in glob.glob("/proc/[0-9]*/cmdline"):
+            try:
+                pid = int(cmdline_path.split("/")[2])
+                if pid == os.getpid():
+                    continue
+
+                with open(cmdline_path, "r") as f:
+                    cmdline = f.read().replace("\x00", " ")
+
+                if not any(pattern in cmdline for pattern in stale_patterns):
+                    continue
+
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    time.sleep(0.5)
+                    if os.path.exists(f"/proc/{pid}"):
                         os.kill(pid, signal.SIGKILL)
-                        logger.info(f"Killed stale gpiochip0 holder PID {pid}")
-                        time.sleep(0.5)
-                    except ProcessLookupError:
-                        pass
-                    except Exception:
-                        pass
+                    logger.info(f"Killed stale dispenser process PID {pid}")
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    pass
+            except Exception:
+                continue
     except Exception as e:
         logger.debug(f"Could not scan for stale GPIO processes: {e}")
     
@@ -426,11 +643,10 @@ def main():
         logger.warning("Unable to write PID file")
 
     # Setup button handlers
-    if button is not None:
-        button.when_released = on_button_pressed
-        button.when_held = on_button_held
-    else:
+    if button is None:
         logger.warning("Button unavailable, input handling disabled")
+    else:
+        setup_button_handlers()
 
     # Initialize device on startup
     if not initialize_device():
@@ -440,9 +656,17 @@ def main():
     # Start background monitoring threads
     monitor_thread = threading.Thread(target=monitor_pairing_status, daemon=True)
     schedule_thread = threading.Thread(target=fetch_schedule_periodically, daemon=True)
+    reminder_thread = threading.Thread(target=check_scheduled_reminders, daemon=True)
+    button_retry_thread = None
 
     monitor_thread.start()
     schedule_thread.start()
+    reminder_thread.start()
+
+    if button is None:
+        button_retry_thread = threading.Thread(target=retry_button_initialization, daemon=True)
+        button_retry_thread.start()
+        logger.warning("Button unavailable at startup, retrying in background")
 
     logger.info("Application ready - waiting for button press...")
 

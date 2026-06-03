@@ -10,13 +10,13 @@ This project includes small Python scripts to test each connected component indi
 | LCD SCL | Pin 5 | GPIO 3 |
 | LCD VCC | Pin 2 or 4 | 5V |
 | LCD GND | Any GND | GND |
-| LED | Pin 11 | GPIO 17 |
+| LED | Pin 29 | GPIO 5 |
 | Button | Pin 15 | GPIO 22 |
-| Buzzer | Pin 13 | GPIO 27 |
+| Buzzer | Pin 31 | GPIO 6 |
 | ULN2003 IN1 | Pin 11 | GPIO 17 |
 | ULN2003 IN2 | Pin 12 | GPIO 18 |
 | ULN2003 IN3 | Pin 13 | GPIO 27 |
-| ULN2003 IN4 | Pin 15 | GPIO 22 |
+| ULN2003 IN4 | Pin 16 | GPIO 23 |
 
 ## Breadboard wiring guide
 
@@ -29,7 +29,7 @@ This project includes small Python scripts to test each connected component indi
 
 ### LED
 
-- Connect GPIO 17, physical pin 11, to the LED anode through a 220 ohm or 330 ohm resistor.
+- Connect GPIO 5, physical pin 29, to the LED anode through a 220 ohm or 330 ohm resistor.
 - Connect the LED cathode to GND.
 
 ### Button
@@ -40,7 +40,7 @@ This project includes small Python scripts to test each connected component indi
 
 ### Buzzer
 
-- Connect signal to GPIO 27, physical pin 13.
+- Connect signal to GPIO 6, physical pin 31.
 - Connect VCC to 5V if your module needs it.
 - Connect GND to GND.
 
@@ -49,7 +49,7 @@ This project includes small Python scripts to test each connected component indi
 - Connect IN1 to GPIO 17, physical pin 11.
 - Connect IN2 to GPIO 18, physical pin 12.
 - Connect IN3 to GPIO 27, physical pin 13.
-- Connect IN4 to GPIO 22, physical pin 15.
+- Connect IN4 to GPIO 23, physical pin 16.
 - Connect ULN2003 VCC to 5V.
 - Connect ULN2003 GND to GND.
 - Plug the motor cable into the ULN2003 board.

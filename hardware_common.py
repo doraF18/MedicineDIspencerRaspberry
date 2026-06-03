@@ -10,21 +10,21 @@ except ImportError:  # pragma: no cover - optional on non-hardware environments.
 
 LCD_I2C_BUS = 1
 LCD_I2C_ADDRESS = 0x27
-LED_PIN = 17
+LED_PIN = 5
 BUTTON_PIN = 22
-BUZZER_PIN = 27
-STEPPER_PINS = (17, 18, 27, 22)
+BUZZER_PIN = 6
+STEPPER_PINS = (17, 18, 27, 23)
 
 PIN_MAP = {
     "LCD SDA": "GPIO2",
     "LCD SCL": "GPIO3",
-    "LED": "GPIO17",
+    "LED": "GPIO5",
     "Button": "GPIO22",
-    "Buzzer": "GPIO27",
+    "Buzzer": "GPIO6",
     "ULN2003 IN1": "GPIO17",
     "ULN2003 IN2": "GPIO18",
     "ULN2003 IN3": "GPIO27",
-    "ULN2003 IN4": "GPIO22",
+    "ULN2003 IN4": "GPIO23",
 }
 
 
