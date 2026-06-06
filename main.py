@@ -18,7 +18,7 @@ import sys
 import time
 from datetime import datetime
 from gpiozero import Button
-from gpiozero import LED, Buzzer
+from gpiozero import LED, PWMOutputDevice
 from signal import pause
 from RPLCD.i2c import CharLCD
 from time import sleep
@@ -52,8 +52,11 @@ buzzer = None
 # Schedule/reminder state
 schedule_lock = threading.Lock()
 cached_schedule = None
-triggered_reminders_date = None
-triggered_reminders_today = set()
+triggered_reminders = set()
+
+# Active reminder cancellation map: reminder_key -> threading.Event
+active_reminders_lock = threading.Lock()
+active_reminders = {}
 
 # Global state
 long_press = False
@@ -122,6 +125,24 @@ def _parse_schedule_time(value):
     return None
 
 
+def _normalize_hhmm(value):
+    """Normalize backend time values like HH:MM:SS or HH:MM into HH:MM."""
+    if not value:
+        return None
+
+    text = str(value).strip()
+    parts = text.split(":")
+    if len(parts) < 2:
+        return None
+
+    hour = parts[0].zfill(2)
+    minute = parts[1].zfill(2)
+    if not (hour.isdigit() and minute.isdigit()):
+        return None
+
+    return f"{hour}:{minute}"
+
+
 def _infer_moment(entry):
     if not isinstance(entry, dict):
         return None
@@ -174,78 +195,269 @@ def _flash_led_for_reminder(duration_seconds=3):
         led.off()
 
 
-def _beep_buzzer_for_reminder(duration_seconds=0.5):
+def _buzzer_tone_on(frequency_hz=2000, duty_cycle=0.9):
+    """Drive buzzer with PWM tone at near-maximum duty cycle for loudest output."""
+    if buzzer is None:
+        return
+
+    try:
+        if hasattr(buzzer, "frequency"):
+            buzzer.frequency = frequency_hz
+
+        if hasattr(buzzer, "value"):
+            buzzer.value = duty_cycle
+        else:
+            buzzer.on()
+    except Exception:
+        try:
+            buzzer.on()
+        except Exception:
+            pass
+
+
+def _beep_buzzer_for_reminder(duration_seconds=1.2):
     if buzzer is None:
         logger.debug("Buzzer unavailable for reminder")
         return
 
     logger.info("Buzzer beep")
     try:
-        buzzer.on()
-        sleep(duration_seconds)
+        for _ in range(2):
+            _buzzer_tone_on(2000, 0.9)
+            sleep(duration_seconds)
+            buzzer.off()
+            sleep(0.2)
     finally:
         buzzer.off()
 
 
-def trigger_reminder(moment):
+def _led_blink(duration_seconds=3, fast=False):
+    if led is None:
+        logger.debug("LED unavailable for reminder")
+        return
+
+    logger.info(f"LED blinking for {duration_seconds}s{' fast' if fast else ''}")
+    end_time = time.monotonic() + duration_seconds
+    try:
+        while time.monotonic() < end_time:
+            led.on()
+            sleep(0.15 if fast else 0.3)
+            led.off()
+            sleep(0.1 if fast else 0.3)
+    finally:
+        try:
+            led.off()
+        except Exception:
+            pass
+
+
+def _buzzer_pattern(pattern: str):
+    if buzzer is None:
+        logger.debug("Buzzer unavailable for reminder")
+        return
+
+    pattern = (pattern or "NORMAL").upper()
+    try:
+        if pattern == "NORMAL":
+            _buzzer_tone_on(2000, 0.9); sleep(0.5); buzzer.off()
+        elif pattern == "MEDIUM":
+            for _ in range(3):
+                _buzzer_tone_on(2000, 0.9); sleep(0.4); buzzer.off(); sleep(0.3)
+        elif pattern == "AGGRESSIVE":
+            for _ in range(5):
+                _buzzer_tone_on(2000, 0.9); sleep(0.35); buzzer.off(); sleep(0.2)
+        else:
+            # Unknown pattern -> single short beep
+            _buzzer_tone_on(2000, 0.9); sleep(0.5); buzzer.off()
+    except Exception as e:
+        logger.debug(f"Buzzer pattern failed: {e}")
+
+
+def get_current_moment():
+    now = datetime.now()
+    if 5 <= now.hour < 12:
+        return "MORNING"
+    if 12 <= now.hour < 17:
+        return "NOON"
+    return "EVENING"
+
+
+def stop_reminder_for_key(reminder_key: str):
+    with active_reminders_lock:
+        ev = active_reminders.get(reminder_key)
+        if ev is not None:
+            ev.set()
+            logger.info("Reminder stopped because dose was taken")
+            try:
+                del active_reminders[reminder_key]
+            except KeyError:
+                pass
+
+
+def start_reminder_sequence(moment: str, reminder_key: str):
+    """Fetch strategy and run the reminder sequence with repeats and cancellation."""
+    # Default low strategy
+    strategy = {"risk": "LOW", "repeatEveryMinutes": 0, "maxRepeats": 0, "buzzerPattern": "NORMAL"}
+
+    # Fetch remote strategy if possible
+    try:
+        fetched = None
+        if device_manager is not None and device_manager.is_paired:
+            fetched = device_manager._make_request("GET", f"/api/devices/{device_manager.device_id}/reminder-strategy")
+
+        # Fallback to PATIENT_ID if device endpoint missing and env provided
+        if not fetched:
+            patient_id = os.getenv("PATIENT_ID")
+            if patient_id:
+                fetched = device_manager._make_request("GET", f"/api/patients/{patient_id}/reminder-strategy") if device_manager else None
+
+        if fetched:
+            logger.info("Risk strategy fetched")
+            strategies = fetched.get("strategies") or {}
+            s = strategies.get(moment)
+            if isinstance(s, dict):
+                strategy.update(s)
+    except Exception as e:
+        logger.debug(f"Failed to fetch reminder strategy: {e}")
+
+    risk = (strategy.get("risk") or "LOW").upper()
+    repeat_minutes = int(strategy.get("repeatEveryMinutes") or 0)
+    max_repeats = int(strategy.get("maxRepeats") or 0)
+    buzzer_pattern = strategy.get("buzzerPattern") or "NORMAL"
+
+    logger.info(f"Using {risk} behavior for {moment}")
+
+    # Register cancellation event
+    cancel_event = threading.Event()
+    with active_reminders_lock:
+        active_reminders[reminder_key] = cancel_event
+
+    # Perform single alert
+    printToLCD(f"Time for pills / Risk: {risk}", timeout=3)
+
+    # Start LED and buzzer for initial alert
+    if risk == "LOW":
+        led_thread = threading.Thread(target=_led_blink, args=(3, False), daemon=True)
+        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=("NORMAL",), daemon=True)
+        led_thread.start(); buzzer_thread.start()
+        # no repeats
+    elif risk == "MEDIUM":
+        led_thread = threading.Thread(target=_led_blink, args=(5, False), daemon=True)
+        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=("MEDIUM",), daemon=True)
+        led_thread.start(); buzzer_thread.start()
+    else:  # HIGH
+        led_thread = threading.Thread(target=_led_blink, args=(10, True), daemon=True)
+        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=("AGGRESSIVE",), daemon=True)
+        led_thread.start(); buzzer_thread.start()
+
+    # Handle repeats for MEDIUM/HIGH
+    if risk in ("MEDIUM", "HIGH") and repeat_minutes > 0 and max_repeats > 0:
+        for i in range(1, max_repeats + 1):
+            # Wait for repeat interval or cancellation
+            waited = cancel_event.wait(timeout=repeat_minutes * 60)
+            if cancel_event.is_set():
+                break
+
+            logger.info(f"Repeating reminder {i}/{max_repeats}")
+            # Play the alert again
+            printToLCD(f"Time for pills / Risk: {risk}", timeout=3)
+            try:
+                if risk == "MEDIUM":
+                    _led_blink(5, False)
+                    _buzzer_pattern("MEDIUM")
+                else:
+                    _led_blink(10, True)
+                    _buzzer_pattern("AGGRESSIVE")
+            except Exception:
+                pass
+
+    # Clean up after finishing
+    with active_reminders_lock:
+        if reminder_key in active_reminders:
+            try:
+                del active_reminders[reminder_key]
+            except KeyError:
+                pass
+
+
+def trigger_reminder(moment, reminder_key):
     logger.info(f"Reminder triggered for {moment}")
 
-    buzzer_thread = threading.Thread(target=_beep_buzzer_for_reminder, daemon=True)
-    led_thread = threading.Thread(target=_flash_led_for_reminder, daemon=True)
+    # Start a background reminder sequence which handles intensity, repeats and cancellation
+    t = threading.Thread(target=start_reminder_sequence, args=(moment, reminder_key), daemon=True)
+    t.start()
 
-    buzzer_thread.start()
+
+def trigger_scheduled_alarm(moment):
+    logger.info(f"Triggering alarm for {moment}")
+    # Run LED and buzzer in parallel threads so all three fire simultaneously
+    led_thread = threading.Thread(target=_led_blink, args=(10, False), daemon=True)
+    buzzer_thread = threading.Thread(target=_beep_buzzer_for_reminder, args=(3.0,), daemon=True)
     led_thread.start()
-
-    printToLCD(f"Time for pills\n{moment}", timeout=3)
+    buzzer_thread.start()
+    printToLCD(f"Time for pills\n{moment}", timeout=10)
+    led_thread.join(timeout=15)
+    buzzer_thread.join(timeout=15)
+    logger.info(f"Alarm completed for {moment}")
 
 
 def check_scheduled_reminders():
-    global triggered_reminders_date, triggered_reminders_today
+    global triggered_reminders
 
     while True:
         try:
-            time.sleep(5)
+            logger.info("Schedule loop running")
 
             if device_manager is None or not device_manager.is_paired:
+                time.sleep(10)
                 continue
 
             now = datetime.now()
+            now_hhmm = now.strftime("%H:%M")
             today = now.strftime("%Y-%m-%d")
-
-            if triggered_reminders_date != today:
-                triggered_reminders_date = today
-                triggered_reminders_today = set()
+            logger.info(f"Current time HH:mm = {now_hhmm}")
 
             with schedule_lock:
                 schedule_snapshot = cached_schedule
 
             if not schedule_snapshot:
+                time.sleep(10)
                 continue
 
-            for entry in _normalize_schedule_entries(schedule_snapshot):
-                if not isinstance(entry, dict):
+            dose_times = {}
+            if isinstance(schedule_snapshot, dict):
+                if isinstance(schedule_snapshot.get("doseTimes"), dict):
+                    dose_times = schedule_snapshot.get("doseTimes") or {}
+                elif isinstance(schedule_snapshot.get("schedule"), dict) and isinstance(schedule_snapshot.get("schedule", {}).get("doseTimes"), dict):
+                    dose_times = schedule_snapshot.get("schedule", {}).get("doseTimes") or {}
+                elif isinstance(schedule_snapshot.get("data"), dict) and isinstance(schedule_snapshot.get("data", {}).get("doseTimes"), dict):
+                    dose_times = schedule_snapshot.get("data", {}).get("doseTimes") or {}
+
+            checks = (
+                ("MORNING", _normalize_hhmm(dose_times.get("morningTime"))),
+                ("NOON", _normalize_hhmm(dose_times.get("noonTime"))),
+                ("EVENING", _normalize_hhmm(dose_times.get("eveningTime"))),
+            )
+
+            for moment, scheduled_time in checks:
+                logger.info(f"Checking {moment} {scheduled_time or 'N/A'}")
+                if not scheduled_time:
                     continue
 
-                schedule_time = _parse_schedule_time(
-                    entry.get("time")
-                    or entry.get("doseTime")
-                    or entry.get("scheduledTime")
-                )
-
-                if not _time_matches_now(now, schedule_time):
-                    continue
-
-                moment = _infer_moment(entry)
                 reminder_key = f"{today}_{moment}"
-
-                if reminder_key in triggered_reminders_today:
+                if reminder_key in triggered_reminders:
                     continue
 
-                triggered_reminders_today.add(reminder_key)
-                trigger_reminder(moment)
+                if now_hhmm == scheduled_time:
+                    logger.info(f"MATCH FOUND for {moment}")
+                    triggered_reminders.add(reminder_key)
+                    trigger_scheduled_alarm(moment)
+
+            time.sleep(10)
 
         except Exception as e:
             logger.error(f"Error checking scheduled reminders: {e}")
+            time.sleep(10)
 
 
 def initialize_device():
@@ -339,9 +551,9 @@ def initialize_hardware():
         logger.error(f"LED unavailable: {e}")
 
     try:
-        buzzer = Buzzer(BUZZER_PIN)
+        buzzer = PWMOutputDevice(BUZZER_PIN, frequency=2000, initial_value=0)
         buzzer.off()
-        logger.info(f"✓ Buzzer initialized on GPIO{BUZZER_PIN}")
+        logger.info(f"✓ Buzzer initialized on GPIO{BUZZER_PIN} (PWM 2kHz)")
     except Exception as e:
         buzzer = None
         logger.error(f"Buzzer unavailable: {e}")
@@ -459,8 +671,11 @@ def on_button_pressed():
         if result.get("success"):
             if result["duplicate"]:
                 printToLCD("Pills already \ntaken", timeout=3)
-
                 logger.info("Pills already taken")
+                # Stop active reminders for this moment
+                moment_now = get_current_moment()
+                today = datetime.now().strftime("%Y-%m-%d")
+                stop_reminder_for_key(f"{today}_{moment_now}")
             else:
                 # New intake
                 logger.info("✓ INTAKE EVENT RECORDED to backend")
@@ -471,6 +686,11 @@ def on_button_pressed():
                     buzzer.off()
 
                 printToLCD("Dose Taken", timeout=3)
+
+                # Stop active reminders for this moment
+                moment_now = get_current_moment()
+                today = datetime.now().strftime("%Y-%m-%d")
+                stop_reminder_for_key(f"{today}_{moment_now}")
 
                 # Trigger motor rotation if the stepper initialized successfully
                 if motor is not None:
@@ -522,7 +742,7 @@ def fetch_schedule_periodically():
                     logger.info("Schedule fetched")
                     logger.info(f"Schedule updated: {schedule}")
 
-            time.sleep(300)  # Check every 5 minutes
+            time.sleep(120)  # Check every 2 minutes
 
         except Exception as e:
             logger.error(f"Error fetching schedule: {e}")
@@ -662,6 +882,10 @@ def main():
     monitor_thread.start()
     schedule_thread.start()
     reminder_thread.start()
+
+    if os.getenv("TEST_ALARM_ON_START", "").lower() == "true":
+        logger.info("TEST_ALARM_ON_START enabled - triggering startup alarm")
+        trigger_scheduled_alarm("MORNING")
 
     if button is None:
         button_retry_thread = threading.Thread(target=retry_button_initialization, daemon=True)
