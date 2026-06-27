@@ -451,7 +451,8 @@ def check_scheduled_reminders():
                 if now_hhmm == scheduled_time:
                     logger.info(f"MATCH FOUND for {moment}")
                     triggered_reminders.add(reminder_key)
-                    trigger_scheduled_alarm(moment)
+                    # Route scheduled reminders through adaptive strategy flow.
+                    trigger_reminder(moment, reminder_key)
 
             time.sleep(10)
 

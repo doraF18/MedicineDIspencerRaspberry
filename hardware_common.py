@@ -38,7 +38,11 @@ def print_pin_table() -> None:
 
 
 def wait_for_enter(message: str) -> None:
-    input(f"{message} Press Enter to continue...")
+    try:
+        input(f"{message} Press Enter to continue...")
+    except (EOFError, KeyboardInterrupt):
+        # Gracefully handle when stdin is not available or user interrupts
+        print(f"{message} Proceeding without user input...")
 
 
 def create_lcd():

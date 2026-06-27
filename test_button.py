@@ -7,15 +7,16 @@ from gpiozero import Button
 from hardware_common import BUTTON_PIN, print_pin_table, wait_for_enter
 
 
+def when_button_pressed() -> None:
+    print("Button was pressed!")
+
+
 def test_button() -> None:
     button = Button(BUTTON_PIN, bounce_time=0.15)
 
     button.when_pressed = when_button_pressed
 
     sleep(10)  # Wait for button presses
-
-def when_button_pressed() -> None:
-    print("Button was pressed!")
 
 def main() -> None:
     print_pin_table()
