@@ -697,7 +697,7 @@ def on_button_pressed():
                 if motor is not None:
                     try:
                         logger.info("Motor rotating after successful intake")
-                        motor.half_turn(direction=1)
+                        motor.dispense_one_dose(direction=1)
                     except Exception as e:
                         logger.error(f"Error rotating motor: {e}")
                 else:

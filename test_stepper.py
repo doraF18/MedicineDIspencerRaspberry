@@ -11,11 +11,9 @@ def test_stepper() -> None:
 
     try:
         print("Testing stepper motor...")
-        print("Rotating forward...")
-        stepper.half_turn(direction=1)
+        print("Running one dose movement...")
+        stepper.dispense_one_dose(direction=1)
         sleep(1)
-        print("Rotating backward...")
-        stepper.half_turn(direction=1)
         print("Stepper motor test complete.")
     finally:
         stepper.close()

@@ -1,5 +1,8 @@
 {
-    "deviceId": "a0054a3d-3420-4475-ace3-315f70778967",
-    "pairCode": "455146",
-    "isPaired": true
+  "deviceId": "a0054a3d-3420-4475-ace3-315f70778967",
+  "pairCode": "455146",
+  "isPaired": true,
+  "stepper": {
+    "steps_per_dose": 295
+  }
 }
