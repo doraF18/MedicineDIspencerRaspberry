@@ -9,7 +9,6 @@ Manages:
 """
 
 import os
-import requests
 import json
 import logging
 import threading
@@ -39,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DEVICE_CONFIG_PATH = os.getenv("DEVICE_CONFIG_PATH", "device_config.json")
-FIREBASE_PATH = os.getenv("FIREBASE_PATH")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8080")
 
 # Hardware initialization
@@ -946,83 +944,6 @@ def cleanup_and_exit(signum=None, frame=None):
         sys.exit(0)
     except SystemExit:
         os._exit(0)
-
-
-# Legacy functions for backward compatibility
-def get_credentials():
-    """Get user credentials (legacy)"""
-    return {
-        "email": "test@gmail.com",
-        "password": "asdasd"
-    }
-
-
-def init_device_legacy():
-    """Legacy Firebase authentication (deprecated)"""
-    url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=AIzaSyAZdzV7TQMmA4nTFr59HspOIWq9XDeYzk0"
-
-    credentials = get_credentials()
-    email = credentials["email"]
-    password = credentials["password"]
-
-    body = {
-        "email": email,
-        "password": password,
-        "returnSecureToken": True
-    }
-
-    response = requests.post(url, json=body)
-
-    if response.status_code != 200:
-        logger.error(f"Error signing in: {response.text}")
-        raise Exception("Error signing in: " + response.text)
-
-    if FIREBASE_PATH:
-        with open(FIREBASE_PATH, "w") as f:
-            json.dump(response.json(), f, indent=4)
-
-    logger.info("Legacy init_device completed")
-
-
-def refresh_id_token(refresh_token):
-    """Refresh Firebase ID token (legacy)"""
-    url = "https://identitytoolkit.googleapis.com/v1/token?key=AIzaSyAZdzV7TQMmA4nTFr59HspOIWq9XDeYzk0"
-
-    body = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token
-    }
-
-    response = requests.post(url, json=body)
-
-    if response.status_code != 200:
-        raise Exception("Error refreshing ID token: " + response.text)
-    else:
-        return response.json()["id_token"]
-
-
-def add_to_history():
-    """Add to history (legacy Firebase)"""
-    try:
-        with open(FIREBASE_PATH, "r") as f:
-            tokens = json.loads(f.read())
-            refresh_token = tokens["refreshToken"]
-            id_token = refresh_id_token(refresh_token)
-
-        url = "https://iiotca.onrender.com/api/user/history"
-
-        header = {
-            "Authorization": "Bearer " + id_token,
-        }
-
-        res = requests.put(url, headers=header)
-
-        if res.status_code != 200:
-            raise Exception("Error adding to history")
-        else:
-            logger.info("Added to history (legacy)")
-    except Exception as e:
-        logger.error(f"Legacy add_to_history failed: {e}")
 
 
 if __name__ == "__main__":
