@@ -8,7 +8,7 @@ from gpiozero import OutputDevice
 from gpiozero.devices import Device
 
 STEPS_PER_REVOLUTION = 4096
-DEFAULT_STEPS_PER_DOSE = 295
+DEFAULT_STEPS_PER_DOSE = 300
 STEPS_PER_DOSE = DEFAULT_STEPS_PER_DOSE
 CONFIG_FILE_PATH = Path(__file__).resolve().parents[1] / "device_config.json"
 

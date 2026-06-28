@@ -193,8 +193,8 @@ def _flash_led_for_reminder(duration_seconds=3):
         led.off()
 
 
-def _buzzer_tone_on(frequency_hz=2000, duty_cycle=0.9):
-    """Drive buzzer with PWM tone at near-maximum duty cycle for loudest output."""
+def _buzzer_tone_on(frequency_hz=2000, duty_cycle=0.5):
+    """Drive buzzer with PWM tone."""
     if buzzer is None:
         return
 
@@ -221,7 +221,7 @@ def _beep_buzzer_for_reminder(duration_seconds=1.2):
     logger.info("Buzzer beep")
     try:
         for _ in range(2):
-            _buzzer_tone_on(2000, 0.9)
+            _buzzer_tone_on(2000, 0.5)
             sleep(duration_seconds)
             buzzer.off()
             sleep(0.2)
@@ -257,16 +257,16 @@ def _buzzer_pattern(pattern: str):
     pattern = (pattern or "NORMAL").upper()
     try:
         if pattern == "NORMAL":
-            _buzzer_tone_on(2000, 0.9); sleep(0.5); buzzer.off()
+            _buzzer_tone_on(2000, 0.5); sleep(0.5); buzzer.off()
         elif pattern == "MEDIUM":
             for _ in range(3):
-                _buzzer_tone_on(2000, 0.9); sleep(0.4); buzzer.off(); sleep(0.3)
+                _buzzer_tone_on(2000, 0.5); sleep(0.4); buzzer.off(); sleep(0.3)
         elif pattern == "AGGRESSIVE":
             for _ in range(5):
-                _buzzer_tone_on(2000, 0.9); sleep(0.35); buzzer.off(); sleep(0.2)
+                _buzzer_tone_on(2000, 0.5); sleep(0.35); buzzer.off(); sleep(0.2)
         else:
             # Unknown pattern -> single short beep
-            _buzzer_tone_on(2000, 0.9); sleep(0.5); buzzer.off()
+            _buzzer_tone_on(2000, 0.5); sleep(0.5); buzzer.off()
     except Exception as e:
         logger.debug(f"Buzzer pattern failed: {e}")
 
