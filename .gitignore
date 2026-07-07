@@ -4,3 +4,6 @@ __pycache__
 *.md
 .env
 .env.*
+.idea/
+api/DeviceConfigurator.py
+models/__init__.py
