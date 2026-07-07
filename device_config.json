@@ -3,6 +3,8 @@
   "pairCode": "455146",
   "isPaired": true,
   "stepper": {
-    "steps_per_dose": 295
+    "steps_per_dose": 295,
+    "current_position": "MORNING",
+    "steps_per_slot": 295
   }
 }

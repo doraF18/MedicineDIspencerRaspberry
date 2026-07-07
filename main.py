@@ -17,7 +17,7 @@ import sys
 import time
 from datetime import datetime
 from gpiozero import Button
-from gpiozero import LED, PWMOutputDevice
+from gpiozero import LED, PWMOutputDevice, OutputDevice
 from signal import pause
 from RPLCD.i2c import CharLCD
 from time import sleep
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DEVICE_CONFIG_PATH = os.getenv("DEVICE_CONFIG_PATH", "device_config.json")
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8080")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://10.195.30.69:8080")
 
 # Hardware initialization
 motor = None
@@ -139,6 +139,130 @@ def _normalize_hhmm(value):
         return None
 
     return f"{hour}:{minute}"
+
+
+def _extract_dose_times(schedule_snapshot):
+    """Extract dose times by moment from multiple backend payload shapes."""
+    dose_by_moment = {}
+
+    if not schedule_snapshot:
+        return dose_by_moment
+
+    if isinstance(schedule_snapshot, dict):
+        dose_times = {}
+        if isinstance(schedule_snapshot.get("doseTimes"), dict):
+            dose_times = schedule_snapshot.get("doseTimes") or {}
+        elif isinstance(schedule_snapshot.get("schedule"), dict) and isinstance(schedule_snapshot.get("schedule", {}).get("doseTimes"), dict):
+            dose_times = schedule_snapshot.get("schedule", {}).get("doseTimes") or {}
+        elif isinstance(schedule_snapshot.get("data"), dict) and isinstance(schedule_snapshot.get("data", {}).get("doseTimes"), dict):
+            dose_times = schedule_snapshot.get("data", {}).get("doseTimes") or {}
+
+        morning = _normalize_hhmm(dose_times.get("morningTime"))
+        noon = _normalize_hhmm(dose_times.get("noonTime"))
+        evening = _normalize_hhmm(dose_times.get("eveningTime"))
+
+        if morning:
+            dose_by_moment["MORNING"] = morning
+        if noon:
+            dose_by_moment["NOON"] = noon
+        if evening:
+            dose_by_moment["EVENING"] = evening
+
+    for entry in _normalize_schedule_entries(schedule_snapshot):
+        if not isinstance(entry, dict):
+            continue
+
+        moment = _infer_moment(entry)
+        if not moment:
+            continue
+
+        raw_time = entry.get("time") or entry.get("doseTime") or entry.get("scheduledTime")
+        normalized = _normalize_hhmm(raw_time)
+        if normalized:
+            dose_by_moment[moment] = normalized
+
+    return dose_by_moment
+
+
+def _extract_patient_id_from_payload(payload):
+    """Extract patient ID from common payload shapes."""
+    if not isinstance(payload, dict):
+        return None
+
+    direct = payload.get("patientId") or payload.get("patient_id")
+    if direct is not None and str(direct).strip():
+        return str(direct).strip()
+
+    patient_obj = payload.get("patient")
+    if isinstance(patient_obj, dict):
+        nested = patient_obj.get("id") or patient_obj.get("patientId") or patient_obj.get("patient_id")
+        if nested is not None and str(nested).strip():
+            return str(nested).strip()
+
+    for key in ("data", "schedule"):
+        nested_payload = payload.get(key)
+        if isinstance(nested_payload, dict):
+            nested_patient_id = _extract_patient_id_from_payload(nested_payload)
+            if nested_patient_id:
+                return nested_patient_id
+
+    return None
+
+
+def _resolve_patient_id_for_reminders():
+    """Resolve patient ID from paired schedule first, then config/env fallback."""
+    with schedule_lock:
+        schedule_snapshot = cached_schedule
+
+    patient_id = _extract_patient_id_from_payload(schedule_snapshot)
+    if patient_id:
+        return patient_id
+
+    if device_manager is not None:
+        patient_id = _extract_patient_id_from_payload(getattr(device_manager, "schedule", None))
+        if patient_id:
+            return patient_id
+
+        # Fallback: ask backend pairing-status for the paired patient context.
+        try:
+            if device_manager.is_paired and device_manager.device_id:
+                pairing_status = device_manager._make_request(
+                    "GET", f"/api/devices/{device_manager.device_id}/pairing-status"
+                )
+                patient_id = _extract_patient_id_from_payload(pairing_status)
+                if patient_id:
+                    # Cache for next startup/use.
+                    try:
+                        with open(DEVICE_CONFIG_PATH, "r", encoding="utf-8") as handle:
+                            cfg = json.load(handle)
+                    except Exception:
+                        cfg = {}
+
+                    if not isinstance(cfg, dict):
+                        cfg = {}
+                    cfg["patientId"] = patient_id
+
+                    with open(DEVICE_CONFIG_PATH, "w", encoding="utf-8") as handle:
+                        json.dump(cfg, handle, indent=2)
+
+                    return patient_id
+        except Exception:
+            pass
+
+    try:
+        with open(DEVICE_CONFIG_PATH, "r", encoding="utf-8") as handle:
+            cfg = json.load(handle)
+        patient_id = cfg.get("patientId") or cfg.get("patient_id")
+        if patient_id is not None and str(patient_id).strip():
+            return str(patient_id).strip()
+    except Exception:
+        pass
+
+    patient_id = os.getenv("PATIENT_ID")
+    if patient_id is not None and str(patient_id).strip():
+        return str(patient_id).strip()
+
+    return None
 
 
 def _infer_moment(entry):
@@ -300,28 +424,30 @@ def start_reminder_sequence(moment: str, reminder_key: str):
     # Fetch remote strategy if possible
     try:
         fetched = None
-        if device_manager is not None and device_manager.is_paired:
-            fetched = device_manager._make_request("GET", f"/api/devices/{device_manager.device_id}/reminder-strategy")
+        patient_id = _resolve_patient_id_for_reminders()
 
-        # Fallback to PATIENT_ID if device endpoint missing and env provided
-        if not fetched:
-            patient_id = os.getenv("PATIENT_ID")
-            if patient_id:
-                fetched = device_manager._make_request("GET", f"/api/patients/{patient_id}/reminder-strategy") if device_manager else None
+        if device_manager is not None and device_manager.is_paired and patient_id:
+            fetched = device_manager._make_request("GET", f"/api/patients/{patient_id}/reminder-strategy")
+        elif device_manager is not None and device_manager.is_paired:
+            logger.warning("Patient ID not found in paired schedule; using default LOW reminder strategy")
 
         if fetched:
             logger.info("Risk strategy fetched")
             strategies = fetched.get("strategies") or {}
-            s = strategies.get(moment)
+            # Support exact and case-variant keys from backend payload
+            s = strategies.get(moment) or strategies.get(str(moment).upper()) or strategies.get(str(moment).lower())
             if isinstance(s, dict):
                 strategy.update(s)
+            ai_explanation = fetched.get("aiExplanation")
+            if ai_explanation:
+                logger.info(f"Strategy note: {ai_explanation}")
     except Exception as e:
         logger.debug(f"Failed to fetch reminder strategy: {e}")
 
-    risk = (strategy.get("risk") or "LOW").upper()
+    risk = str(strategy.get("risk") or "LOW").upper()
     repeat_minutes = int(strategy.get("repeatEveryMinutes") or 0)
     max_repeats = int(strategy.get("maxRepeats") or 0)
-    buzzer_pattern = strategy.get("buzzerPattern") or "NORMAL"
+    buzzer_pattern = str(strategy.get("buzzerPattern") or "NORMAL").upper()
 
     logger.info(f"Using {risk} behavior for {moment}")
 
@@ -336,16 +462,16 @@ def start_reminder_sequence(moment: str, reminder_key: str):
     # Start LED and buzzer for initial alert
     if risk == "LOW":
         led_thread = threading.Thread(target=_led_blink, args=(3, False), daemon=True)
-        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=("NORMAL",), daemon=True)
+        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=(buzzer_pattern,), daemon=True)
         led_thread.start(); buzzer_thread.start()
         # no repeats
     elif risk == "MEDIUM":
         led_thread = threading.Thread(target=_led_blink, args=(5, False), daemon=True)
-        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=("MEDIUM",), daemon=True)
+        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=(buzzer_pattern,), daemon=True)
         led_thread.start(); buzzer_thread.start()
     else:  # HIGH
         led_thread = threading.Thread(target=_led_blink, args=(10, True), daemon=True)
-        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=("AGGRESSIVE",), daemon=True)
+        buzzer_thread = threading.Thread(target=_buzzer_pattern, args=(buzzer_pattern,), daemon=True)
         led_thread.start(); buzzer_thread.start()
 
     # Handle repeats for MEDIUM/HIGH
@@ -362,10 +488,10 @@ def start_reminder_sequence(moment: str, reminder_key: str):
             try:
                 if risk == "MEDIUM":
                     _led_blink(5, False)
-                    _buzzer_pattern("MEDIUM")
+                    _buzzer_pattern(buzzer_pattern)
                 else:
                     _led_blink(10, True)
-                    _buzzer_pattern("AGGRESSIVE")
+                    _buzzer_pattern(buzzer_pattern)
             except Exception:
                 pass
 
@@ -411,9 +537,8 @@ def check_scheduled_reminders():
                 continue
 
             now = datetime.now()
-            now_hhmm = now.strftime("%H:%M")
             today = now.strftime("%Y-%m-%d")
-            logger.info(f"Current time HH:mm = {now_hhmm}")
+            logger.info(f"Current time HH:mm = {now.strftime('%H:%M')}")
 
             with schedule_lock:
                 schedule_snapshot = cached_schedule
@@ -422,22 +547,14 @@ def check_scheduled_reminders():
                 time.sleep(10)
                 continue
 
-            dose_times = {}
-            if isinstance(schedule_snapshot, dict):
-                if isinstance(schedule_snapshot.get("doseTimes"), dict):
-                    dose_times = schedule_snapshot.get("doseTimes") or {}
-                elif isinstance(schedule_snapshot.get("schedule"), dict) and isinstance(schedule_snapshot.get("schedule", {}).get("doseTimes"), dict):
-                    dose_times = schedule_snapshot.get("schedule", {}).get("doseTimes") or {}
-                elif isinstance(schedule_snapshot.get("data"), dict) and isinstance(schedule_snapshot.get("data", {}).get("doseTimes"), dict):
-                    dose_times = schedule_snapshot.get("data", {}).get("doseTimes") or {}
+            dose_by_moment = _extract_dose_times(schedule_snapshot)
+            if not dose_by_moment:
+                logger.warning("No dose times found in schedule payload")
+                time.sleep(10)
+                continue
 
-            checks = (
-                ("MORNING", _normalize_hhmm(dose_times.get("morningTime"))),
-                ("NOON", _normalize_hhmm(dose_times.get("noonTime"))),
-                ("EVENING", _normalize_hhmm(dose_times.get("eveningTime"))),
-            )
-
-            for moment, scheduled_time in checks:
+            for moment in ("MORNING", "NOON", "EVENING"):
+                scheduled_time = dose_by_moment.get(moment)
                 logger.info(f"Checking {moment} {scheduled_time or 'N/A'}")
                 if not scheduled_time:
                     continue
@@ -446,7 +563,20 @@ def check_scheduled_reminders():
                 if reminder_key in triggered_reminders:
                     continue
 
-                if now_hhmm == scheduled_time:
+                schedule_time_obj = _parse_schedule_time(scheduled_time)
+                if schedule_time_obj is None:
+                    continue
+
+                scheduled_dt = now.replace(
+                    hour=schedule_time_obj.hour,
+                    minute=schedule_time_obj.minute,
+                    second=0,
+                    microsecond=0,
+                )
+                seconds_since_scheduled = (now - scheduled_dt).total_seconds()
+
+                # Trigger once when loop runs during the scheduled minute.
+                if 0 <= seconds_since_scheduled < 60:
                     logger.info(f"MATCH FOUND for {moment}")
                     triggered_reminders.add(reminder_key)
                     # Route scheduled reminders through adaptive strategy flow.
@@ -554,8 +684,13 @@ def initialize_hardware():
         buzzer.off()
         logger.info(f"✓ Buzzer initialized on GPIO{BUZZER_PIN} (PWM 2kHz)")
     except Exception as e:
-        buzzer = None
-        logger.error(f"Buzzer unavailable: {e}")
+        try:
+            buzzer = OutputDevice(BUZZER_PIN, active_high=True, initial_value=False)
+            buzzer.off()
+            logger.warning(f"Buzzer PWM unavailable ({e}), using digital fallback on GPIO{BUZZER_PIN}")
+        except Exception as fallback_error:
+            buzzer = None
+            logger.error(f"Buzzer unavailable: {fallback_error}")
 
     try:
         lcd = CharLCD('PCF8574', address=0x27, port=1, cols=16, rows=2)
@@ -597,6 +732,74 @@ def setup_button_handlers():
 
     button.when_released = on_button_pressed
     button.when_held = on_button_held
+
+
+def get_active_moments_from_schedule():
+    """
+    Extract active medication moments from the cached schedule.
+    
+    Returns:
+        List of moments: ["MORNING", "NOON", "EVENING"] etc.
+    """
+    with schedule_lock:
+        schedule_snapshot = cached_schedule
+
+    return list(_extract_dose_times(schedule_snapshot).keys())
+
+
+def align_motor_to_active_moment(target_moment):
+    """
+    Rotate motor from current position to target active moment, skipping empty slots.
+    
+    Args:
+        target_moment: One of MORNING, NOON, EVENING
+    
+    Returns:
+        List of moments that were skipped (for logging)
+    
+    Raises:
+        RuntimeError: If motor is not available or rotation fails
+    """
+    if motor is None:
+        raise RuntimeError("Motor not available")
+
+    current_position = motor.current_wheel_position
+    logger.info(f"Motor align: current_position={current_position}, target_moment={target_moment}")
+
+    if target_moment not in ["MORNING", "NOON", "EVENING"]:
+        raise ValueError(f"Invalid target_moment: {target_moment}")
+
+    # Calculate slots to advance
+    slots_to_advance = motor.calculate_slots_to_advance(current_position, target_moment)
+    logger.info(f"Need to advance {slots_to_advance} slots to reach {target_moment}")
+
+    # Log skipped moments
+    skipped_moments = []
+    if slots_to_advance > 0:
+        current_idx = ["MORNING", "NOON", "EVENING"].index(current_position)
+        for i in range(1, slots_to_advance):
+            skipped_idx = (current_idx + i) % 3
+            skipped_moment = ["MORNING", "NOON", "EVENING"][skipped_idx]
+            skipped_moments.append(skipped_moment)
+            logger.info(f"Skipping empty slot: {skipped_moment}")
+
+    # Rotate motor only if slots_to_advance > 0
+    if slots_to_advance > 0:
+        steps_to_rotate = slots_to_advance * motor.steps_per_slot
+        logger.info(f"Rotating motor: {slots_to_advance} slots × {motor.steps_per_slot} steps/slot = {steps_to_rotate} total steps")
+
+        try:
+            motor.step(steps_to_rotate, direction=1)
+            logger.info(f"Motor rotation complete - now at {target_moment}")
+        except Exception as exc:
+            raise RuntimeError(f"Motor rotation failed: {exc}") from exc
+
+    # Update and persist current position
+    motor.current_wheel_position = target_moment
+    motor._save_current_wheel_position(target_moment)
+    logger.info(f"Dispensing active slot: {target_moment}")
+
+    return skipped_moments
 
 
 def on_button_held():
@@ -665,20 +868,53 @@ def on_button_pressed():
     logger.info("✓ Button press accepted - recording medication intake...")
 
     try:
-        # Post intake event to backend
+        # Get current medication moment
+        moment_now = get_current_moment()
+        logger.info(f"Current moment: {moment_now}")
+
+        # Get active moments from schedule
+        active_moments = get_active_moments_from_schedule()
+        logger.info(f"Active moments from schedule: {active_moments}")
+
+        # Check if current moment is active (has medication scheduled)
+        is_current_moment_active = moment_now in active_moments
+
+        if not is_current_moment_active and active_moments:
+            logger.warning(f"{moment_now} is not in active moments {active_moments}")
+            printToLCD(f"No meds at {moment_now}", timeout=2)
+            return
+
+        # Align motor to current active moment (skipping any empty slots)
+        motor_aligned = False
+        if motor is not None and active_moments:
+            try:
+                skipped = align_motor_to_active_moment(moment_now)
+                motor_aligned = True
+                if skipped:
+                    logger.info(f"Motor skipped empty slots: {skipped}")
+            except Exception as e:
+                logger.error(f"Motor alignment failed: {e}")
+                printToLCD("Motor error", timeout=2)
+                return
+        elif motor is not None:
+            logger.debug("No active moments in schedule - motor not aligned")
+        else:
+            logger.debug("Motor not available")
+
+        # Post intake event to backend ONLY if current moment is active
         result = device_manager.post_intake_event(source="BUTTON")
         if result.get("success"):
             if result["duplicate"]:
                 printToLCD("Pills already \ntaken", timeout=3)
                 logger.info("Pills already taken")
                 # Stop active reminders for this moment
-                moment_now = get_current_moment()
                 today = datetime.now().strftime("%Y-%m-%d")
                 stop_reminder_for_key(f"{today}_{moment_now}")
             else:
-                # New intake
+                # New intake - only triggered for active medication moments
                 logger.info("✓ INTAKE EVENT RECORDED to backend")
 
+                # Trigger buzzer and LED feedback ONLY for active moments
                 if led is not None:
                     led.off()
                 if buzzer is not None:
@@ -687,19 +923,8 @@ def on_button_pressed():
                 printToLCD("Dose Taken", timeout=3)
 
                 # Stop active reminders for this moment
-                moment_now = get_current_moment()
                 today = datetime.now().strftime("%Y-%m-%d")
                 stop_reminder_for_key(f"{today}_{moment_now}")
-
-                # Trigger motor rotation if the stepper initialized successfully
-                if motor is not None:
-                    try:
-                        logger.info("Motor rotating after successful intake")
-                        motor.dispense_one_dose(direction=1)
-                    except Exception as e:
-                        logger.error(f"Error rotating motor: {e}")
-                else:
-                    logger.debug("Motor not available")
 
         else:
             logger.error("✗ Failed to record intake event")

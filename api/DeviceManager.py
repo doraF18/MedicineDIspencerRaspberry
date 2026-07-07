@@ -43,7 +43,7 @@ class DeviceManager:
             backend_url: Backend API base URL (defaults to env var BACKEND_URL)
         """
         self.config_path = Path(config_path)
-        self.backend_url = backend_url or os.getenv("BACKEND_URL", "http://localhost:8080")
+        self.backend_url = backend_url or os.getenv("BACKEND_URL", "http://10.195.30.69:8080")
         self.device_id = self._get_or_create_device_id()
         self.pair_code = None
         self.is_paired = False
